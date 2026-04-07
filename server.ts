@@ -9,11 +9,36 @@ const GREETING = Deno.env.get("GREETING") || "👋 Hi from the hermes-staging CV
 
 let ready = false;
 let greetResult = "";
+let credsReady = false;
+
+// Inject env vars from tee-daemon warmup (same pattern as tweetbot)
+function injectCreds(ctx: Record<string, unknown>) {
+  if (typeof ctx?.env !== "object" || ctx.env === null) return;
+  const e = ctx.env as Record<string, string>;
+  if (e.MATRIX_HOMESERVER && e.MATRIX_ACCESS_TOKEN) {
+    (globalThis as Record<string, unknown>).MATRIX_HOMESERVER = e.MATRIX_HOMESERVER;
+    (globalThis as Record<string, unknown>).MATRIX_ACCESS_TOKEN = e.MATRIX_ACCESS_TOKEN;
+    (globalThis as Record<string, unknown>).MATRIX_USER_ID = e.MATRIX_USER_ID;
+    (globalThis as Record<string, unknown>).TARGET_USER = e.TARGET_USER || TARGET_USER;
+    (globalThis as Record<string, unknown>).GREETING = e.GREETING || GREETING;
+    if (!credsReady) {
+      credsReady = true;
+      greet();
+    }
+  }
+}
+
+// Helper to get current value of env var (may be set via warmup)
+function getEnv(name: string): string {
+  return (globalThis as Record<string, unknown>)[name] as string || Deno.env.get(name) || "";
+}
 
 async function matrixRequest(path: string, method = "GET", body?: Record<string, unknown>): Promise<unknown> {
-  const url = `${MATRIX_HOMESERVER}/_matrix/client/v3/${path}`;
+  const hs = getEnv("MATRIX_HOMESERVER");
+  const token = getEnv("MATRIX_ACCESS_TOKEN");
+  const url = `${hs}/_matrix/client/v3/${path}`;
   const headers: Record<string, string> = {
-    "Authorization": `Bearer ${MATRIX_ACCESS_TOKEN}`,
+    "Authorization": `Bearer ${token}`,
   };
   const opts: RequestInit = { method, headers };
   if (body) {
@@ -54,6 +79,7 @@ async function sendMessage(roomId: string, body: string): Promise<string> {
 }
 
 async function findExistingDm(targetUserId: string): Promise<string | null> {
+  const myUserId = getEnv("MATRIX_USER_ID");
   const rooms = await getJoinedRooms();
   for (const roomId of rooms) {
     try {
@@ -63,7 +89,7 @@ async function findExistingDm(targetUserId: string): Promise<string | null> {
       const members = (data.joined || [])
         .filter((m: { membership: string }) => m.membership === "join")
         .map((m: { user_id: string }) => m.user_id);
-      if (members.includes(targetUserId) && members.includes(MATRIX_USER_ID)) {
+      if (members.includes(targetUserId) && members.includes(myUserId)) {
         return roomId;
       }
     } catch {
@@ -74,20 +100,22 @@ async function findExistingDm(targetUserId: string): Promise<string | null> {
 }
 
 async function greet() {
-  console.log(`[greeter] Looking for existing DM with ${TARGET_USER}...`);
+  const target = getEnv("TARGET_USER");
+  const greeting = getEnv("GREETING");
+  console.log(`[greeter] Looking for existing DM with ${target}...`);
   try {
-    const existingRoom = await findExistingDm(TARGET_USER);
+    const existingRoom = await findExistingDm(target);
     if (existingRoom) {
       console.log(`[greeter] Found existing DM: ${existingRoom}`);
-      const eventId = await sendMessage(existingRoom, GREETING);
+      const eventId = await sendMessage(existingRoom, greeting);
       greetResult = `Sent to existing room ${existingRoom} (event ${eventId})`;
     } else {
       console.log(`[greeter] No existing DM, creating room...`);
-      const roomId = await createRoom(`🪶 greeter`, TARGET_USER);
+      const roomId = await createRoom(`🪶 greeter`, target);
       console.log(`[greeter] Created room ${roomId}`);
       // Wait a beat for the invite to propagate
       await new Promise(r => setTimeout(r, 1000));
-      const eventId = await sendMessage(roomId, GREETING);
+      const eventId = await sendMessage(roomId, greeting);
       greetResult = `Created room ${roomId}, sent message (event ${eventId})`;
     }
     ready = true;
@@ -99,11 +127,10 @@ async function greet() {
   }
 }
 
-// Run greet on startup
-greet();
-
 // HTTP handler for tee-daemon router
 export default async function handler(req: Request, ctx: Record<string, unknown>): Promise<Response> {
+  // Inject creds from warmup
+  injectCreds(ctx);
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/greeter/, "") || "/";
 
@@ -136,15 +163,15 @@ export default async function handler(req: Request, ctx: Record<string, unknown>
 </div>
 <div class="card">
   <div class="label">Homeserver</div>
-  <div class="value">${MATRIX_HOMESERVER}</div>
+  <div class="value">${getEnv("MATRIX_HOMESERVER")}</div>
 </div>
 <div class="card">
   <div class="label">Bot</div>
-  <div class="value">${MATRIX_USER_ID}</div>
+  <div class="value">${getEnv("MATRIX_USER_ID")}</div>
 </div>
 <div class="card">
   <div class="label">Target</div>
-  <div class="value">${TARGET_USER}</div>
+  <div class="value">${getEnv("TARGET_USER")}</div>
 </div>
 <div class="card">
   <div class="label">Last Greet Result</div>
