@@ -32,7 +32,7 @@ ENV_JSON=$(
   done | paste -sd ',' -
 )
 
-MANIFEST="{\"name\":\"greeter\",\"runtime\":\"deno\",\"entry\":\"server.ts\",\"attested\":false,\"env\":{$ENV_JSON},\"source\":\"https://github.com/amiller/matrix-greeter\",\"ref\":\"main\"}"
+MANIFEST="{\"name\":\"greeter\",\"runtime\":\"deno\",\"entry\":\"server.ts\",\"attested\":false,\"listen\":{\"port\":8080,\"protocol\":\"http\"},\"env\":{$ENV_JSON},\"source\":\"https://github.com/amiller/matrix-greeter\",\"ref\":\"main\"}"
 
 FORCE="${1:-}"
 if [ "$FORCE" = "--force" ]; then
